@@ -55,9 +55,16 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
   private Application application;
   private Activity activity;
 
-  private MethodCall pendingCall;
-  private Result pendingResult;
-  private static final int REQUEST_FINE_LOCATION_PERMISSIONS = 1452;
+  // private MethodCall pendingCall;
+  // private Result pendingResult;
+  // private static final int REQUEST_FINE_LOCATION_PERMISSIONS = 1452;
+
+  private interface OperationOnPermission {
+      public void op(boolean granted, String permission);
+  }
+
+  private int lastEventId = 1452;
+  private Map<Integer, OperationOnPermission> operationsOnPermission = new HashMap<Integer, OperationOnPermission>();
 
   public static void registerWith(Registrar registrar) {
     final BluetoothPrintPlugin instance = new BluetoothPrintPlugin();
@@ -175,16 +182,23 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
         break;
       case "startScan":
       {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-          ActivityCompat.requestPermissions(
-                  activityBinding.getActivity(),
-                  new String[] {Manifest.permission.ACCESS_FINE_LOCATION},
-                  REQUEST_FINE_LOCATION_PERMISSIONS);
-          pendingCall = call;
-          pendingResult = result;
-          break;
-        }
-        startScan(call, result);
+        ensurePermissionBeforeAction(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.ACCESS_FINE_LOCATION, (granted, permission) -> {
+          if (granted)
+              startScan(call, result);
+          else
+              result.error(
+                  "no_permissions", String.format("flutter_blue plugin requires %s for scanning", permission), null);
+        });
+        // if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        //   ActivityCompat.requestPermissions(
+        //           activityBinding.getActivity(),
+        //           new String[] {Manifest.permission.ACCESS_FINE_LOCATION},
+        //           REQUEST_FINE_LOCATION_PERMISSIONS);
+        //   pendingCall = call;
+        //   pendingResult = result;
+        //   break;
+        // }
+        // startScan(call, result);
         break;
       }
       case "stopScan":
@@ -426,16 +440,20 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
 
   @Override
   public boolean onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-
-    if (requestCode == REQUEST_FINE_LOCATION_PERMISSIONS) {
-      if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-        startScan(pendingCall, pendingResult);
-      } else {
-        pendingResult.error("no_permissions", "this plugin requires location permissions for scanning", null);
-        pendingResult = null;
-      }
+    OperationOnPermission operation = operationsOnPermission.get(requestCode);
+    if (operation != null && grantResults.length > 0) {
+      operation.op(grantResults[0] == PackageManager.PERMISSION_GRANTED, permissions[0]);
       return true;
     }
+    // if (requestCode == REQUEST_FINE_LOCATION_PERMISSIONS) {
+    //   if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+    //     startScan(pendingCall, pendingResult);
+    //   } else {
+    //     pendingResult.error("no_permissions", "this plugin requires location permissions for scanning", null);
+    //     pendingResult = null;
+    //   }
+    //   return true;
+    // }
     return false;
 
   }
@@ -479,5 +497,24 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
       context.unregisterReceiver(mReceiver);
     }
   };
+
+  private void ensurePermissionBeforeAction(String permissionA12, String permission, OperationOnPermission operation) {
+        permission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? permissionA12 : permission;
+        if (permission != null && ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED) {
+            operationsOnPermission.put(lastEventId, (granted, perm) -> {
+                operationsOnPermission.remove(lastEventId);
+                operation.op(granted, perm);
+            });
+            ActivityCompat.requestPermissions(
+                    activityBinding.getActivity(),
+                    new String[] {
+                            permission
+                    },
+                    lastEventId);
+            lastEventId++;
+        } else {
+            operation.op(true, permission);
+        }
+    }
 
 }
